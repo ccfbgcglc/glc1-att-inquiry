@@ -148,6 +148,14 @@
   .book-gray{background:#E8EBEF;border-color:#D5DAE1;}
   .book-gray .n{color:#5B6472;}
   .book-gray .lbl{color:#6E7684;}
+  .missed{
+    font-size:13px;
+    color:var(--pine-dim);
+    margin:14px 0 0;
+    padding-top:14px;
+    border-top:1px solid var(--line);
+    display:none;
+  }
   footer{margin-top:20px;font-size:12px;color:var(--pine-dim);text-align:center;}
 </style>
 </head>
@@ -176,6 +184,7 @@
       <span class="badge" id="badge"></span>
       <div class="desc" id="desc"></div>
       <div class="grid" id="grid"></div>
+      <p class="missed" id="missed"></p>
     </div>
   </div>
 
@@ -208,9 +217,9 @@ const STATUSES = {
     html: `<p>Congratulations! All 15 sessions attended. You're cleared on attendance — go ahead and submit the rest of your GLC requirements: True Life Retreat, True Life App, and the New Testament reading.</p>${CONTACT_HTML}`
   },
   makeup: {
-    label: "makeup",
+    label: "Makeup",
     css: "mid",
-    html: `<p>Oops! You haven't completed all 15 sessions yet. If you're within the allowed absences, please answer and <a href="${FORM_LINK}" target="_blank" rel="noopener">apply for make-up classes</a> to finish attendance for this series.</p>${CONTACT_HTML}`
+    html: `<p>Oops! You haven't completed all 15 sessions yet. If you're within the allowed absences, please answer and <a href="${FORM_LINK}" target="_blank" rel="noopener">apply for makeup classes</a> to finish attendance for this series.</p>${CONTACT_HTML}`
   },
   retake: {
     label: "Retake/Appeal",
@@ -283,12 +292,15 @@ function evaluate(row){
   let totalAttended = 0;
   const exceeded = [];
   const perBook = [];
+  const missed = [];
 
   BOOKS.forEach(book => {
     let attended = 0;
     for (let i = 0; i < book.sessions; i++){
       const val = row[col + i];
-      if (val === true || String(val).trim().toUpperCase() === "TRUE") attended++;
+      const isPresent = val === true || String(val).trim().toUpperCase() === "TRUE";
+      if (isPresent) attended++;
+      else missed.push({ book: book.name, session: i + 1 });
     }
     col += book.sessions;
     totalAttended += attended;
@@ -307,14 +319,23 @@ function evaluate(row){
   else if (exceeded.length === 0) statusKey = "makeup";
   else statusKey = "retake";
 
-  return { statusKey, exceeded, perBook };
+  return { statusKey, exceeded, perBook, missed };
 }
 
-function render(statusKey, exceeded, perBook){
+function formatMissedList(missed){
+  const items = missed.map(m => `<strong>Session ${m.session} ${m.book}</strong>`);
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return items.join(" and ");
+  return items.slice(0, -1).join(", ") + ", and " + items[items.length - 1];
+}
+
+function render(statusKey, exceeded, perBook, missed){
   const s = STATUSES[statusKey];
   const badge = document.getElementById("badge");
   const desc = document.getElementById("desc");
   const grid = document.getElementById("grid");
+  const missedEl = document.getElementById("missed");
 
   badge.textContent = s.label;
   badge.className = "badge " + s.css;
@@ -329,6 +350,14 @@ function render(statusKey, exceeded, perBook){
     div.innerHTML = `<span class="n">${b.attended}/${b.sessions}</span><span class="lbl">${b.name}</span>`;
     grid.appendChild(div);
   });
+
+  if (missed && missed.length > 0){
+    missedEl.innerHTML = "You missed: " + formatMissedList(missed) + ".";
+    missedEl.style.display = "block";
+  } else {
+    missedEl.innerHTML = "";
+    missedEl.style.display = "none";
+  }
 
   document.getElementById("result").style.display = "block";
 }
@@ -360,10 +389,11 @@ async function checkStatus(){
       document.getElementById("badge").className = "badge " + s.css;
       document.getElementById("desc").innerHTML = s.html;
       document.getElementById("grid").innerHTML = "";
+      document.getElementById("missed").style.display = "none";
       document.getElementById("result").style.display = "block";
     } else {
-      const { statusKey, exceeded, perBook } = evaluate(row);
-      render(statusKey, exceeded, perBook);
+      const { statusKey, exceeded, perBook, missed } = evaluate(row);
+      render(statusKey, exceeded, perBook, missed);
     }
   } catch (e){
     msg.textContent = "Couldn't load the attendance sheet right now. Please try again in a moment.";
