@@ -304,7 +304,7 @@ function evaluate(row){
 
   let statusKey;
   if (totalAttended === 15) statusKey = "complete";
-  else if (exceeded.length === 0) statusKey = "make-up";
+  else if (exceeded.length === 0) statusKey = "makeup";
   else statusKey = "retake";
 
   return { statusKey, exceeded, perBook };
