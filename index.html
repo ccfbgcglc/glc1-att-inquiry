@@ -198,12 +198,20 @@ const SHEET_ID = "1HEct0PjCUOb1HxNFkF5osrjcXjc3AqUz4cBYi9r37c8";
 const SHEET_NAME = "Sheet1"; // must match the tab name at the bottom of the spreadsheet exactly
 const GVIZ_URL_BASE = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
 
-// Column layout in the sheet: [A]=ID, [B]=Last Name, then 15 session checkboxes.
+// Column layout in the sheet: [A]=ID, [B]=Last Name, then session checkboxes.
+// Each book reserves its widest possible column span (6 for Books 1-2, 4 for Books 3-4)
+// so both the older 5/5/3/2 cohort and the newer 6/6/4/4 cohort fit the same sheet.
+// A genuinely empty cell (no checkbox at all) means "not applicable to this student" —
+// it's skipped entirely, not counted as a session or an absence. An unchecked (FALSE)
+// box still counts as a real, missed session.
+// absenceLimits maps "how many real sessions this student actually has for this book"
+// to "how many of those they're allowed to miss" — so the right rule is picked
+// automatically per student, with no cohort flag needed.
 const BOOKS = [
-  { name: "Book 1", sessions: 5, allowedAbsences: 2 },
-  { name: "Book 2", sessions: 5, allowedAbsences: 2 },
-  { name: "Book 3", sessions: 3, allowedAbsences: 1 },
-  { name: "Book 4", sessions: 2, allowedAbsences: 0 },
+  { name: "Book 1", maxSessions: 6, absenceLimits: { 5: 2, 6: 2 } },
+  { name: "Book 2", maxSessions: 6, absenceLimits: { 5: 2, 6: 2 } },
+  { name: "Book 3", maxSessions: 4, absenceLimits: { 3: 1, 4: 1 } },
+  { name: "Book 4", maxSessions: 4, absenceLimits: { 2: 0, 4: 1 } },
 ];
 
 const VIBER_LINK = "https://invite.viber.com/?g2=AQBlW6bDW%2Bru7VTgP6cbWmmZFl22IQCyoBd7cOoDbUPDrwLe%2B6Q6oY6ag%2Fxqh3ao";
@@ -214,7 +222,7 @@ const STATUSES = {
   complete: {
     label: "Complete",
     css: "ok",
-    html: `<p>Congratulations! All 15 sessions attended. You're cleared on attendance — go ahead and submit the rest of your GLC requirements: True Life Retreat, True Life App, and the New Testament reading.</p>${CONTACT_HTML}`
+    html: `<p>Congratulations! All {totalPossible} sessions attended. You're cleared on attendance — go ahead and submit the rest of your GLC requirements: True Life Retreat, True Life App, and the New Testament reading.</p>${CONTACT_HTML}`
   },
   makeup: {
     label: "Makeup",
@@ -290,36 +298,49 @@ function findRow(id, lastName){
 function evaluate(row){
   let col = 2; // sessions start at column C (index 2)
   let totalAttended = 0;
+  let totalPossible = 0;
   const exceeded = [];
   const perBook = [];
   const missed = [];
 
   BOOKS.forEach(book => {
     let attended = 0;
-    for (let i = 0; i < book.sessions; i++){
+    let realSessions = 0; // how many of this book's columns actually have a value for this student
+    for (let i = 0; i < book.maxSessions; i++){
       const val = row[col + i];
+      if (val === "" || val === null || val === undefined) continue; // not applicable — skip entirely
+      realSessions++;
       const isPresent = val === true || String(val).trim().toUpperCase() === "TRUE";
       if (isPresent) attended++;
-      else missed.push({ book: book.name, session: i + 1 });
+      else missed.push({ book: book.name, session: realSessions });
     }
-    col += book.sessions;
+    col += book.maxSessions;
     totalAttended += attended;
-    const absences = book.sessions - attended;
+    totalPossible += realSessions;
+
+    const absences = realSessions - attended;
+    const allowedKeys = Object.keys(book.absenceLimits).map(Number);
+    const allowed = book.absenceLimits[realSessions] !== undefined
+      ? book.absenceLimits[realSessions]
+      : book.absenceLimits[Math.max(...allowedKeys)]; // fallback if session count is unrecognized
+
     let colorStatus;
-    if (attended === book.sessions) colorStatus = "complete";
+    if (realSessions === 0) colorStatus = "none";
+    else if (attended === realSessions) colorStatus = "complete";
     else if (attended === 0) colorStatus = "none";
-    else if (absences <= book.allowedAbsences) colorStatus = "within";
+    else if (absences <= allowed) colorStatus = "within";
     else colorStatus = "exceeded";
-    perBook.push({ name: book.name, attended, sessions: book.sessions, colorStatus });
-    if (absences > book.allowedAbsences) exceeded.push(book.name);
+
+    perBook.push({ name: book.name, attended, sessions: realSessions, colorStatus });
+    if (realSessions > 0 && absences > allowed) exceeded.push(book.name);
   });
 
   let statusKey;
-  if (totalAttended === 15) statusKey = "complete";
+  if (totalPossible > 0 && totalAttended === totalPossible) statusKey = "complete";
   else if (exceeded.length === 0) statusKey = "makeup";
   else statusKey = "retake";
 
-  return { statusKey, exceeded, perBook, missed };
+  return { statusKey, exceeded, perBook, missed, totalPossible };
 }
 
 function formatMissedList(missed){
@@ -330,7 +351,7 @@ function formatMissedList(missed){
   return items.slice(0, -1).join(", ") + ", and " + items[items.length - 1];
 }
 
-function render(statusKey, exceeded, perBook, missed){
+function render(statusKey, exceeded, perBook, missed, totalPossible){
   const s = STATUSES[statusKey];
   const badge = document.getElementById("badge");
   const desc = document.getElementById("desc");
@@ -340,7 +361,7 @@ function render(statusKey, exceeded, perBook, missed){
   badge.textContent = s.label;
   badge.className = "badge " + s.css;
 
-  desc.innerHTML = s.html;
+  desc.innerHTML = s.html.replace("{totalPossible}", totalPossible);
 
   const colorClass = { complete: "book-green", within: "book-yellow", exceeded: "book-red", none: "book-gray" };
   grid.innerHTML = "";
@@ -392,8 +413,8 @@ async function checkStatus(){
       document.getElementById("missed").style.display = "none";
       document.getElementById("result").style.display = "block";
     } else {
-      const { statusKey, exceeded, perBook, missed } = evaluate(row);
-      render(statusKey, exceeded, perBook, missed);
+      const { statusKey, exceeded, perBook, missed, totalPossible } = evaluate(row);
+      render(statusKey, exceeded, perBook, missed, totalPossible);
     }
   } catch (e){
     msg.textContent = "Couldn't load the attendance sheet right now. Please try again in a moment.";
